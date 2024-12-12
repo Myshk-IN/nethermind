@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net6.0</TargetFramework> 
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="bindings/native_methods.g.cs" />
+    <Compile Include="bindings/native_methods.loading.cs" />
+  </ItemGroup>
+</Project>
