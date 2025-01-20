@@ -32,6 +32,7 @@ using Nethermind.Init.Snapshot;
 using Nethermind.KeyStore.Config;
 using Nethermind.Logging;
 using Nethermind.Logging.NLog;
+using Nethermind.JsonRpc;
 using Nethermind.Runner;
 using Nethermind.Runner.Ethereum;
 using Nethermind.Runner.Ethereum.Api;
@@ -43,6 +44,8 @@ using NLog;
 using NLog.Config;
 using ILogger = Nethermind.Logging.ILogger;
 using NullLogger = Nethermind.Logging.NullLogger;
+using Nethermind.Grandine;
+
 
 Console.Title = ProductInfo.Name;
 // Increase regex cache size as more added in log coloring matches
@@ -85,9 +88,32 @@ finally
     NLogManager.Shutdown();
 }
 
+void AddGrandineConfig(Dictionary<string, List<string>> grandineConfig, IConfigProvider configProvider, ParseResult parseResult)
+{
+    IJsonRpcConfig jsonRpcConfig = configProvider.GetConfig<IJsonRpcConfig>();
+    var network = parseResult.GetValue(BasicOptions.Grandine)
+        ?? parseResult.GetValue(BasicOptions.Configuration)
+        ?? Environment.GetEnvironmentVariable("NETHERMIND_CONFIG")
+        ?? "mainnet";
+    grandineConfig.TryAdd("--network", [ network ]);
+    if (!grandineConfig.TryAdd("--eth1-rpc-urls", [ $"http://{jsonRpcConfig.EngineHost}:{jsonRpcConfig.EnginePort}" ]))
+    {
+        grandineConfig["--eth1-rpc-urls"].Add($"http://{jsonRpcConfig.EngineHost}:{jsonRpcConfig.EnginePort}");
+    }
+    grandineConfig.TryAdd("--jwt-secret", [ $"{Directory.GetCurrentDirectory()}/{jsonRpcConfig.JwtSecretFile}" ]);
+    grandineConfig.TryAdd("--checkpoint-sync-url", [ CheckPointSyncUrls.Urls[network] ]);
+}
+
 async Task<int> ConfigureAsync(string[] args)
 {
     CliConfiguration cli = ConfigureCli();
+    
+    Dictionary<string, List<string>> grandineConfig = null;
+    if (args.Contains(BasicOptions.Grandine.Name))
+    {
+        (args, grandineConfig) = Grandine.Configure(args); // TODO
+    }
+    
     ParseResult parseResult = cli.Parse(args);
     // Suppress logs if run with `--help` or `--version`
     bool silent = parseResult.CommandResult.Children
@@ -133,23 +159,32 @@ async Task<int> ConfigureAsync(string[] args)
 
     AddConfigurationOptions(cli.RootCommand);
 
-    cli.RootCommand.SetAction((result, token) => RunAsync(result, pluginLoader, token));
-
+    IConfigProvider configProvider = CreateConfigProvider(parseResult);
+    //cli.RootCommand.SetAction((result, token) => RunAsync(result, pluginLoader, token));
+    cli.RootCommand.SetAction((result, token) => RunAsync(configProvider, result, pluginLoader, token));
+    var cancellationToken = new CancellationTokenSource();
     try
     {
+        if (grandineConfig is not null)
+        {
+            AddGrandineConfig(grandineConfig, configProvider, parseResult);
+            _ = Grandine.Run(grandineConfig, cancellationToken.Token);
+        }
         return await cli.InvokeAsync(args);
     }
     finally
     {
+        await cancellationToken.CancelAsync();
         exit.Wait();
     }
 }
+    
 
-async Task<int> RunAsync(ParseResult parseResult, PluginLoader pluginLoader, CancellationToken cancellationToken)
+async Task<int> RunAsync(IConfigProvider configProvider, ParseResult parseResult, PluginLoader pluginLoader, CancellationToken cancellationToken)
 {
     processExitSource = new(cancellationToken);
 
-    IConfigProvider configProvider = CreateConfigProvider(parseResult);
+    //IConfigProvider configProvider = CreateConfigProvider(parseResult);
     IInitConfig initConfig = configProvider.GetConfig<IInitConfig>();
     IKeyStoreConfig keyStoreConfig = configProvider.GetConfig<IKeyStoreConfig>();
     ISnapshotConfig snapshotConfig = configProvider.GetConfig<ISnapshotConfig>();
@@ -306,6 +341,7 @@ CliConfiguration ConfigureCli()
         BasicOptions.LoggerConfigurationSource,
         BasicOptions.LogLevel,
         BasicOptions.PluginsDirectory
+        BasicOptions.Grandine
     ];
 
     var versionOption = (VersionOption)rootCommand.Children.SingleOrDefault(c => c is VersionOption);
@@ -398,7 +434,8 @@ IConfigProvider CreateConfigProvider(ParseResult parseResult)
     configProvider.AddSource(argsSource);
     configProvider.AddSource(new EnvConfigSource());
 
-    string configFile = parseResult.GetValue(BasicOptions.Configuration)
+    string configFile = parseResult.GetValue(BasicOptions.Grandine)
+        ?? parseResult.GetValue(BasicOptions.Configuration)
         ?? Environment.GetEnvironmentVariable("NETHERMIND_CONFIG")
         ?? "mainnet";
 
@@ -524,6 +561,12 @@ void ResolveDataDirectory(string? path, IInitConfig initConfig, IKeyStoreConfig 
 
 static class BasicOptions
 {
+    public static CliOption<string> Grandine { get; } =
+    new("--grandine")
+    {
+        Description = "Enable embedded grandine consensus client.",
+        HelpName = "Grandine Consensus Client"
+    };
     public static CliOption<string> Configuration { get; } =
         new("--config", "-c")
         {

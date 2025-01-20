@@ -11,8 +11,6 @@ public class GrandineIntegration
 
     public void Start(string[] args)
     {
-
-
         _grandine.Run(args);
     }
 }

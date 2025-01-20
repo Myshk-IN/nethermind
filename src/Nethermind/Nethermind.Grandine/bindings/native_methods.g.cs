@@ -12,10 +12,8 @@ namespace Grandine.Native
 {
     internal static unsafe partial class NativeMethods
     {
-        const string __DllName = "c_grandine";
-
-
-
+        const string __DllName = "libc_grandine.so";
+        
         [DllImport(__DllName, EntryPoint = "grandine_run", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         internal static extern ulong grandine_run(ulong argc, byte** argv);
 

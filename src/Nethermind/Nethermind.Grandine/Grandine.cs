@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using static Grandine.Native.NativeMethods;
 
 namespace Grandine;
@@ -10,38 +13,67 @@ public sealed unsafe class Grandine
     {
     }
 
-    public void Run(string[] args)
+    public unsafe static async Task Run(Dictionary<string, List<string>> grandineConfig, CancellationToken cancellationToken)
     {
-        Console.WriteLine("Running Grandine with arguments: " + string.Join(" ", args)); // for testing
-        byte** argv = ConvertToByteArray(args);
-        
-        try
+        Console.WriteLine("Running Grandine with arguments:"); // for testing
+        foreach (var entry in grandineConfig)
         {
-            ulong result = grandine_run((ulong)args.Length, argv);
+            Console.WriteLine($"{entry.Key}: {string.Join(", ", entry.Value)}");
+        }
 
-            if (result != 0)
-            {
-                throw new Exception($"Grandine failed with error code {result}.");
-            }
-        }
-        finally
+        await Task.Run(() =>
         {
-            FreeByteArray(args.Length, argv);
-        }
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            byte** argv = null;
+            try
+            {
+                string[] configs = ConvertDictionaryToArray(grandineConfig);
+                argv = ConvertToByteArray(configs);
+                ulong result = grandine_run((ulong)configs.Length, argv);
+
+                if (result != 0)
+                {
+                    throw new Exception($"Grandine failed with error code {result}.");
+                }
+            }
+            finally
+            {
+                FreeByteArray(grandineConfig.Count, argv);
+            }
+        }, cancellationToken);
     }
 
-    private byte** ConvertToByteArray(string[] args)
+    private static string[] ConvertDictionaryToArray(Dictionary<string, List<string>> grandineConfig)
     {
-        byte** argv = (byte**)Marshal.AllocHGlobal(args.Length * sizeof(byte*));
-        for (int i = 0; i < args.Length; i++)
+        var configs = new List<string>();
+        foreach (var entry in grandineConfig)
         {
-            argv[i] = (byte*)Marshal.StringToHGlobalAnsi(args[i]).ToPointer();
+            foreach (var value in entry.Value)
+            {
+                configs.Add($"{entry.Key}={value}");
+            }
+        }
+        return configs.ToArray();
+    }
+
+    private static byte** ConvertToByteArray(string[] configs)
+    {
+        byte** argv = (byte**)Marshal.AllocHGlobal(configs.Length * sizeof(byte*));
+        for (int i = 0; i < configs.Length; i++)
+        {
+            argv[i] = (byte*)Marshal.StringToHGlobalAnsi(configs[i]).ToPointer();
         }
         return argv;
     }
 
-    private void FreeByteArray(int length, byte** argv)
+    private static void FreeByteArray(int length, byte** argv)
     {
+        if (argv == null) return;
+
         for (int i = 0; i < length; i++)
         {
             Marshal.FreeHGlobal((IntPtr)argv[i]);
